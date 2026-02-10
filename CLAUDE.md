@@ -16,6 +16,7 @@ File-based signaling with WezTerm Lua polling:
 2. **WezTerm Lua timer** polls every 1s, detects the file, parses it, deletes it, and:
    - Finds the specific pane by ID and calls `pane:inject_output('\x07')` to feed BEL into the VT parser
    - Shows a **toast notification** with the project name and event details
+   - Marks the tab in `bell_tabs` for **tab bell indicator** (bell icon on inactive tabs, auto-expires after 30s)
 
 ## Architecture
 
@@ -25,6 +26,7 @@ Claude Code hook (Stop/Notification)
   → bell.exe writes ~/.claude/bell_signal (project, pane ID, event, message)
   → WezTerm Lua timer detects file, parses it, deletes it
   → Finds pane by ID → pane:inject_output('\x07') on that pane only
+  → Marks tab in bell_tabs if not active → tabline shows bell icon
   → window:toast_notification() with project name + event info
 ```
 
@@ -54,8 +56,16 @@ line 4: message (from stdin JSON message)
     }
   }
   ```
-- **`~/.wezterm.lua`** — polling timer + pane targeting + toast notification snippet:
+- **`~/.wezterm.lua`** — bell state tracking + tabline bell indicator + polling timer + pane targeting + toast notification:
   ```lua
+  -- Track tabs with pending Claude Code bell notifications
+  -- Key: tab_id (number), Value: os.time() timestamp
+  local bell_tabs = {}
+
+  -- In tabline.setup(), tab_active and tab_inactive sections use function components:
+  -- tab_active: clears bell_tabs[tab.tab_id] on focus (returns '')
+  -- tab_inactive: shows md_bell_badge_outline icon if bell_tabs entry exists and <= 30s old
+
   local bell_signal_path = 'C:/Users/SShadowS/.claude/bell_signal'
   local function poll_bell_signal()
     local f = io.open(bell_signal_path, 'r')
@@ -64,7 +74,7 @@ line 4: message (from stdin JSON message)
       f:close()
       os.remove(bell_signal_path)
 
-      -- Parse signal file lines
+      -- Parse signal file lines: project_name, pane_id, hook_event, message
       local lines = {}
       for line in content:gmatch('[^\n]*') do
         table.insert(lines, line)
@@ -74,41 +84,57 @@ line 4: message (from stdin JSON message)
       local hook_event = lines[3] or ''
       local message = lines[4] or ''
 
-      -- Build toast content
-      local toast_title = 'Claude Code - ' .. project_name
-      local toast_message
-      if hook_event == 'Stop' then
-        toast_message = 'Finished responding'
-      elseif hook_event == 'Notification' and message ~= '' then
-        toast_message = message
-      else
-        toast_message = 'Needs attention'
-      end
-
-      -- Find the target pane by ID and inject bell
-      local found = false
+      -- Find the target pane by ID
+      local target_pane = nil
+      local target_window = nil
       if pane_id ~= '' then
         for _, w in ipairs(wezterm.gui.gui_windows()) do
           for _, mux_tab in ipairs(w:mux_window():tabs()) do
-            for _, pane in ipairs(tab:panes()) do
+            for _, pane in ipairs(mux_tab:panes()) do
               if tostring(pane:pane_id()) == pane_id then
-                pane:inject_output('\x07')
-                w:toast_notification(toast_title, toast_message, nil, 4000)
-                found = true
+                target_pane = pane
+                target_window = w
               end
             end
           end
         end
       end
 
-      -- Fallback: inject into active pane of each window
-      if not found then
+      -- Fallback to active pane
+      if not target_pane then
         for _, w in ipairs(wezterm.gui.gui_windows()) do
           local pane = w:active_pane()
           if pane then
-            pane:inject_output('\x07')
-            w:toast_notification(toast_title, toast_message, nil, 4000)
+            target_pane = pane
+            target_window = w
+            break
           end
+        end
+      end
+
+      if target_pane then
+        if hook_event == 'Stop' or hook_event == 'Notification' then
+          target_pane:inject_output('\x07')
+
+          -- Track bell for tab highlighting
+          local tab = target_pane:tab()
+          if tab then
+            local active_tab = target_window:active_tab()
+            if active_tab and active_tab:tab_id() ~= tab:tab_id() then
+              bell_tabs[tab:tab_id()] = os.time()
+            end
+          end
+
+          local toast_title = 'Claude Code - ' .. project_name
+          local toast_message
+          if hook_event == 'Stop' then
+            toast_message = 'Finished responding'
+          elseif message ~= '' then
+            toast_message = message
+          else
+            toast_message = 'Needs attention'
+          end
+          target_window:toast_notification(toast_title, toast_message, nil, 4000)
         end
       end
     end
