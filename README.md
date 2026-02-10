@@ -21,6 +21,10 @@ Claude Code hook (Stop/Notification)
 
 Subagent events (Task tool agents) are automatically filtered out — only main conversation stops and notifications trigger the bell.
 
+## Requirements
+
+This project works with stock WezTerm for the bell + toast notifications. However, the per-pane **header bars** (showing project name in each pane) require a [custom WezTerm fork](https://github.com/SShadowS/wezterm) that adds `pane:set_header()` / `pane:get_header()` Lua API and a `format-pane-header` callback. See commit [`ac4d795`](https://github.com/SShadowS/wezterm/commit/ac4d79511f72f0560b7b5ae1964962e75dcf4c48) for details.
+
 ## Setup
 
 ### 1. Build & Deploy
