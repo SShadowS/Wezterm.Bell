@@ -1,6 +1,22 @@
 # Wezterm.Bell
 
+![Language](https://img.shields.io/badge/language-Rust-orange?logo=rust)
+![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey?logo=windows)
+
 A tiny, zero-dependency Rust binary that triggers [WezTerm](https://wezfurlong.org/wezterm/)'s visual bell from [Claude Code](https://docs.anthropic.com/en/docs/claude-code) hooks, with project-aware toast notifications and per-pane targeting.
+
+## Overview
+
+| Property | Value |
+|----------|-------|
+| Language | Rust (edition 2021) |
+| Dependencies | Zero |
+| Build | `cargo build --release` with `strip` + LTO |
+| Platform | Windows (ConPTY / WezTerm) |
+| Hook events | `Stop`, `Notification` |
+| Subagent filtering | Yes — Task tool agents are ignored |
 
 ## Problem
 
@@ -21,21 +37,31 @@ Claude Code hook (Stop/Notification)
 
 Subagent events (Task tool agents) are automatically filtered out — only main conversation stops and notifications trigger the bell.
 
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| Visual bell | Injects `\x07` BEL into the correct WezTerm pane |
+| Toast notifications | Shows project name + event message via WezTerm's notification API |
+| Per-pane targeting | Uses `WEZTERM_PANE` to flash the exact pane that launched Claude |
+| Subagent filtering | Skips `hook_event_name` values from Task tool sub-agents |
+| Fallback | If pane ID is missing or not found, falls back to the active pane |
+
 ## Requirements
 
-This project works with stock WezTerm for the bell + toast notifications. However, the per-pane **header bars** (showing project name in each pane) require a [custom WezTerm fork](https://github.com/SShadowS/wezterm) that adds `pane:set_header()` / `pane:get_header()` Lua API and a `format-pane-header` callback. See commit [`ac4d795`](https://github.com/SShadowS/wezterm/commit/ac4d79511f72f0560b7b5ae1964962e75dcf4c48) for details.
+This project works with stock WezTerm for the bell and toast notifications. However, per-pane **header bars** (showing the project name in each pane) require a [custom WezTerm fork](https://github.com/SShadowS/wezterm) that adds `pane:set_header()` / `pane:get_header()` Lua API and a `format-pane-header` callback. See commit [`ac4d795`](https://github.com/SShadowS/wezterm/commit/ac4d79511f72f0560b7b5ae1964962e75dcf4c48) for details.
 
 ## Setup
 
 ### 1. Build & Deploy
 
 ```bash
-git clone <this-repo> ~/.claude/bell
+git clone https://github.com/SShadowS/Wezterm.Bell ~/.claude/bell
 cd ~/.claude/bell
 cargo build --release
 ```
 
-Or if you have the repo elsewhere, use the included build script which builds and copies to `~/.claude/bell/`:
+Or if you have the repo elsewhere, use the included build script which builds and copies the binary to `~/.claude/bell/`:
 
 ```bash
 bash build.sh
@@ -133,18 +159,35 @@ wezterm.time.call_after(1, poll_bell_signal)
 
 ## Signal File Format
 
-```
-line 1: project name (from CLAUDE_PROJECT_DIR, fallback: "Claude Code")
-line 2: pane ID (from WEZTERM_PANE, fallback: empty)
-line 3: hook event name (from stdin JSON hook_event_name)
-line 4: message (from stdin JSON message)
-```
+`bell.exe` writes `~/.claude/bell_signal` as a plain-text file. WezTerm reads and deletes it on the next poll cycle.
+
+| Line | Source | Fallback |
+|------|--------|----------|
+| 1 — project name | `CLAUDE_PROJECT_DIR` (basename) | `"Claude Code"` |
+| 2 — pane ID | `WEZTERM_PANE` env var | empty string |
+| 3 — hook event | `hook_event_name` from stdin JSON | empty string |
+| 4 — message | `message` from stdin JSON | empty string |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/main.rs` | Reads env/stdin, writes signal file |
+| `build.sh` | Builds release binary and copies to `~/.claude/bell/` |
+| `Cargo.toml` | Crate config — zero dependencies, strip + LTO enabled |
 
 ## Why Not CONOUT$?
 
-We tried two Win32 approaches that both failed:
+Two Win32 approaches that both failed:
 
-- **`WriteConsoleW` to `CONOUT$`** — writes to console character buffer, ConPTY doesn't relay BEL
-- **`WriteFile` to `CONOUT$`** — writes raw bytes to screen buffer, ConPTY diffs the buffer but drops control characters
+| Approach | Why it fails |
+|----------|-------------|
+| `WriteConsoleW` to `CONOUT$` | Writes to the console character buffer; ConPTY does not relay BEL |
+| `WriteFile` to `CONOUT$` | Writes raw bytes to the screen buffer; ConPTY diffs the buffer but drops control characters |
 
 The file-signal + `inject_output` approach is the only reliable path on Windows with ConPTY.
+
+---
+
+**Author:** Torben Leth — [sshadows@sshadows.dk](mailto:sshadows@sshadows.dk)  
+**License:** MIT
